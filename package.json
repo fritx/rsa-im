@@ -1,0 +1,9 @@
+{
+  "type": "module",
+  "dependencies": {
+    "await-to-js": "^3.0.0",
+    "axios": "^1.4.0",
+    "generate-password": "^1.7.0",
+    "stream-to-promise": "^3.0.0"
+  }
+}
