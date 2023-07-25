@@ -46,6 +46,8 @@ let FileWriter = {
  * helpers
  */
 let validateUsername = username => {
+  let user = storage.userList.find(user => user.username === username)
+  if (user) throw createHttpError(403, 'user already taken')
   if (username.length < 2 || username.length > 16) {
     throw createHttpError(403, 'username should be 2~16 characters')
   }
