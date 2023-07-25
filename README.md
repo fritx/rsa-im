@@ -40,6 +40,8 @@ P1:
   - eslint organzeImports
   - eslint-config-fritx
 
+<img width=600 src=WechatIMG611.jpg>
+
 ## How to join?
 
 ```sh
