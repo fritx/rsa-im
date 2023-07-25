@@ -1,0 +1,13 @@
+{
+  // Config VS Code auto fix
+  // https://github.com/antfu/eslint-config#config-vs-code-auto-fix
+  "prettier.enable": false,
+  "editor.formatOnSave": false,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": true,
+    "source.organizeImports": true,
+  },
+  // Intellisense vs JavaScript Modules - lack of ".js" in completion #126171
+  // https://github.com/microsoft/vscode/issues/126171
+  "javascript.preferences.importModuleSpecifierEnding": "js"
+}

@@ -1,9 +1,22 @@
 {
   "type": "module",
+  "scripts": {
+    "lint": "eslint . --fix"
+  },
+  "bin": {
+    "rsa-im": "client.js"
+  },
   "dependencies": {
     "await-to-js": "^3.0.0",
     "axios": "^1.4.0",
     "generate-password": "^1.7.0",
+    "http-errors": "^2.0.0",
+    "moment": "^2.29.4",
+    "steno": "^3.0.0",
     "stream-to-promise": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.17.0",
+    "eslint-config-fritx": "^0.2.4"
   }
 }

@@ -1,6 +1,3 @@
-let Status = {
-  success: 'success',
-}
 export let Header = {
   sessionSecret: 'x-session-secret',
 }
@@ -15,12 +12,11 @@ export let Url = {
   pull: '/pull',
 }
 
-let generateKeyPair = () => {
+export let dateJson = () => new Date().toJSON()
+
+export let encrypt = (value, publicKey) => {
 
 }
-let encrypt = (value, publicKey) => {
-
-}
-let decrypt = (value, privateKey) => {
+export let decrypt = (value, privateKey) => {
 
 }
