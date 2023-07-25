@@ -16,18 +16,30 @@ export let Url = {
 
 export let dateJson = () => new Date().toJSON()
 
+let rsaOptions = {
+  padding: constants.RSA_PKCS1_OAEP_PADDING,
+  oaepHash: 'sha256',
+}
 export let encrypt = (publicKey, value) => {
-  return publicEncrypt({
-    key: publicKey,
-    padding: constants.RSA_PKCS1_OAEP_PADDING,
-    oaepHash: 'sha256',
-  }, value).toString('base64')
+  try {
+    let res = publicEncrypt({
+      ...rsaOptions,
+      key: publicKey,
+    }, value).toString('base64')
+    return [null, res]
+  } catch (err) {
+    return [err, '']
+  }
 }
 export let decrypt = (privateKey, value) => {
-  let buffer = Buffer.from(value, 'base64')
-  return privateDecrypt({
-    key: privateKey,
-    padding: constants.RSA_PKCS1_OAEP_PADDING,
-    oaepHash: 'sha256',
-  }, buffer).toString()
+  try {
+    let buffer = Buffer.from(value, 'base64')
+    let res = privateDecrypt({
+      ...rsaOptions,
+      key: privateKey,
+    }, buffer).toString()
+    return [null, res]
+  } catch (err) {
+    return [err, '']
+  }
 }

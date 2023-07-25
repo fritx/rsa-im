@@ -73,9 +73,9 @@ let signup = async (username, publicKey) => {
 }
 let prelogin = username => {
   let target = storage.userList.find(user => user.username === username)
+  if (!target) throw createHttpError(404, `user not found: ${username}`)
   let rand = String(Math.random())
-  let publicKey = target && target.publicKey || rand // fake if not found
-  let encrypted = encrypt(publicKey, rand)
+  let [, encrypted] = encrypt(target.publicKey, rand)
   let session = { username, rand, secret: '' }
   memory.sessionList.push(session)
   return encrypted
@@ -107,7 +107,7 @@ let pull = async username => {
 let send = (fromUsername, toUsername, text, clientTime) => {
   let target = storage.userList.find(item => item.username === toUsername)
   if (!target) throw createHttpError(404, `user not found: ${toUsername}`)
-  let encrypted = encrypt(target.publicKey, text)
+  let [, encrypted] = encrypt(target.publicKey, text)
   let serverTime = dateJson()
   let message = { fromUsername, toUsername, encrypted, clientTime, serverTime }
   storage.pendingMessageList.push(message)

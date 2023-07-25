@@ -46,6 +46,7 @@ let excludingErrorProps = [
   'config', 'request', // AxiosError
 ]
 let currentPrompt = ''
+let isLoggingIn = false
 
 /**
  * helpers
@@ -99,18 +100,25 @@ let signup = async username => {
   await post(Url.signup, { username, publicKey })
   await save({ publicKey, privateKey, username })
 }
-let login = async () => {
+let loginBare = async () => {
   let { username, privateKey } = storage
   let { encrypted } = await post(Url.prelogin, { username })
-  let decrypted = decrypt(privateKey, encrypted)
+  let [, decrypted] = decrypt(privateKey, encrypted)
   let { secret } = await post(Url.login, { username, decrypted })
   await save({ sessionSecret: secret })
+}
+let login = async () => {
+  isLoggingIn = true
+  let [err] = await to(loginBare())
+  isLoggingIn = false
+  if (err) throw err
 }
 let pull = async () => {
   let { pending } = await post(Url.pull)
   let { privateKey } = storage
   pending.forEach(message => {
-    message.text = decrypt(privateKey, message.encrypted)
+    let [, text] = decrypt(privateKey, message.encrypted)
+    Object.assign(message, { text })
     delete message.encrypted
   })
   storage.messageList.push(...pending)
@@ -138,8 +146,8 @@ let handleError = async err => {
   if (currentPrompt) process.stdout.write(currentPrompt)
 
   if (err.status === 401) { // need to log in
-    await save({ sessionSecret: '' })
-    process.exit(1)
+    if (isLoggingIn) return
+    await login()
   }
 }
 process.on('uncaughtException', handleError)
