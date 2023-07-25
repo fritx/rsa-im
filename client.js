@@ -102,6 +102,7 @@ let signup = async username => {
 }
 let loginBare = async () => {
   let { username, privateKey } = storage
+  log(`Logging in... username: ${username}`)
   let { encrypted } = await post(Url.prelogin, { username })
   let [, decrypted] = decrypt(privateKey, encrypted)
   let { secret } = await post(Url.login, { username, decrypted })
@@ -111,7 +112,16 @@ let login = async () => {
   isLoggingIn = true
   let [err] = await to(loginBare())
   isLoggingIn = false
-  if (err) throw err
+  if (err) {
+    await handleError(err)
+    if (err.status === 404) {
+      log([
+        'Record not found from the server side',
+        'Consider backing-up + removing `~/.rsa-im` then try again',
+      ].join('\n'))
+    }
+    process.exit(1)
+  }
 }
 let pull = async () => {
   let { pending } = await post(Url.pull)
@@ -133,17 +143,23 @@ let send = async (toUsername, text) => {
 /**
  * CLI main
  */
+let log = (...args) => {
+  if (currentPrompt) console.log()
+  console.log(...args)
+  if (currentPrompt) process.stdout.write(currentPrompt)
+}
+let logError = (...args) => {
+  if (currentPrompt) console.log()
+  console.error(...args)
+  if (currentPrompt) process.stdout.write(currentPrompt)
+}
 let handleError = async err => {
   let status = err && err.status || 500
   let hideStack = /^4\d\d$/.test(status)
-  if (currentPrompt) console.log()
-  console.log()
   let tmp = excludingErrorProps.map(k => err && err[k])
   if (tmp[0]) excludingErrorProps.forEach(k => delete err[k])
-  console.error(hideStack ? String(err) : err)
+  logError('\n' + hideStack ? String(err) : err + '\n')
   if (tmp[0]) excludingErrorProps.forEach((k, i) => err[k] = tmp[i])
-  console.log()
-  if (currentPrompt) process.stdout.write(currentPrompt)
 
   if (err.status === 401) { // need to log in
     if (isLoggingIn) return
@@ -161,11 +177,7 @@ let formatMessage = message => {
 }
 let listMessages = list => {
   if (!list.length) return
-  if (currentPrompt) console.log()
-  console.log()
-  console.log(list.map(formatMessage).join('\n'))
-  console.log()
-  if (currentPrompt) process.stdout.write(currentPrompt)
+  log('\n' + list.map(formatMessage).join('\n') + '\n')
 }
 let interaction = async () => {
   let { username, sessionSecret } = storage
@@ -175,27 +187,21 @@ let interaction = async () => {
       // already logged in
       let toUsername = await question('Talking to whom?')
       if (!toUsername) return
-      console.log(`Chatting with ${toUsername}...`)
-      console.log('Type anything to send... (/q to quit, /ls to list all users)')
+      log('Type anything to send... (/q to quit, /ls to list all users)')
       while (true) { // loop
         let input = await question(`${username} -> ${toUsername}:`)
         let isQuit = ['/q', '/quit', '/exit'].includes(input)
         if (isQuit) return
         let isList = ['/ls', '/list'].includes(input)
         if (isList) {
-          console.log('WIP...')
+          log('WIP...')
           return
         }
         await send(toUsername, input)
       }
     } else {
       // need to log in
-      console.log(`Logging in... username: ${username}`)
-      let [err] = await to(login())
-      if (err) {
-        await handleError(err)
-        process.exit(1)
-      }
+      await login()
     }
   } else {
     // need to sign up
@@ -205,17 +211,25 @@ let interaction = async () => {
     if (twice === username) await signup(username)
   }
 }
+let polling = async throws => {
+  if (!storage.sessionSecret) return
+  let [err, pending] = await to(pull())
+  if (err) {
+    if (throws) throw err
+    await handleError(err)
+    return
+  }
+  listMessages(pending)
+}
 let main = async () => {
-  setInterval(async () => {
-    if (!storage.sessionSecret) return
-    let pending = await pull()
-    if (pending.length) listMessages(pending)
-  }, 1000 * 10)
   // storage init
   let [err] = await to(initStorage())
   if (err) await to(mkdir(Dir.data)) // err ignored
   // list messages
   listMessages(storage.messageList)
+  // async polling
+  await polling(true)
+  setInterval(polling, 1000 * 10)
   // interaction loop
   while (true) {
     let [err] = await to(interaction())
