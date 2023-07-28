@@ -1,8 +1,6 @@
 import { constants, privateDecrypt, publicEncrypt } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 
-export let Header = {
-  sessionSecret: 'x-session-secret',
-}
 export let Method = {
   POST: 'POST',
 }
@@ -12,6 +10,19 @@ export let Url = {
   login: '/login',
   send: '/send',
   pull: '/pull',
+}
+export let Header = {
+  sessionSecret: 'x-session-secret',
+}
+export let commonHeaders = {
+  'content-type': 'application/json',
+}
+
+export let init = async (File, storage, migrate) => {
+  let json = await readFile(File.storage, 'utf8')
+  let data = JSON.parse(json)
+  migrate(data)
+  Object.assign(storage, data)
 }
 
 export let dateJson = () => new Date().toJSON()

@@ -1,13 +1,13 @@
 import { to } from 'await-to-js'
 import { generate } from 'generate-password'
 import createHttpError from 'http-errors'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Writer } from 'steno'
 import streamToPromise from 'stream-to-promise'
-import { Header, Method, Url, dateJson, encrypt } from './common.js'
+import { Header, Method, Url, commonHeaders, dateJson, encrypt, init } from './common.js'
 
 let storage = {
   userList: [
@@ -19,16 +19,13 @@ let storage = {
 }
 let memory = {
   sessionList: [
-    /* { username, rand, secret }, */
+    /* { username, nonce, secret }, */
   ],
 }
 
 /**
  * config
  */
-let commonHeaders = {
-  'content-type': 'application/json',
-}
 let port = process.env.PORT || 3008
 let __filename = fileURLToPath(import.meta.url)
 let __dirname = dirname(__filename)
@@ -41,18 +38,19 @@ let File = {
 let FileWriter = {
   storage: new Writer(File.storage),
 }
+let textLimit = 200
 
 /**
  * helpers
  */
 let validateUsername = username => {
   let user = storage.userList.find(user => user.username === username)
-  if (user) throw createHttpError(403, 'user already taken')
+  if (user) throw createHttpError(403, `User already taken: ${username}`)
   if (username.length < 2 || username.length > 16) {
-    throw createHttpError(403, 'username should be 2~16 characters')
+    throw createHttpError(400, 'username should be 2~16 characters')
   }
   if (!/^[a-z][a-z0-9]*$/i.test(username)) {
-    throw createHttpError(403, 'Each character should be a-z, A-Z or 0-9')
+    throw createHttpError(400, 'Each character should be a-z, A-Z or 0-9')
   }
 }
 let generateSecret = () => {
@@ -75,16 +73,16 @@ let signup = async (username, publicKey) => {
 }
 let prelogin = username => {
   let target = storage.userList.find(user => user.username === username)
-  if (!target) throw createHttpError(404, `user not found: ${username}`)
-  let rand = String(Math.random())
-  let [, encrypted] = encrypt(target.publicKey, rand)
-  let session = { username, rand, secret: '' }
+  if (!target) throw createHttpError(404, `User not found: ${username}`)
+  let nonce = String(Math.random())
+  let [, encrypted] = encrypt(target.publicKey, nonce)
+  let session = { username, nonce, secret: '' }
   memory.sessionList.push(session)
   return encrypted
 }
 let login = (username, decrypted) => {
   let session = memory.sessionList.find(sess => {
-    return sess.username === username && sess.rand === decrypted
+    return sess.username === username && sess.nonce === decrypted
   })
   if (!session) throw createHttpError(403, 'Handshaking failed')
   let secret = generateSecret()
@@ -107,8 +105,10 @@ let pull = async username => {
   return pending
 }
 let send = (fromUsername, toUsername, text, clientTime) => {
+  if (text.length <= 0) throw createHttpError(400, 'message.text is required')
+  if (text.length > textLimit) throw createHttpError(400, `message.text.length should be less than ${textLimit}`)
   let target = storage.userList.find(item => item.username === toUsername)
-  if (!target) throw createHttpError(404, `user not found: ${toUsername}`)
+  if (!target) throw createHttpError(404, `User not found: ${toUsername}`)
   let [, encrypted] = encrypt(target.publicKey, text)
   let serverTime = dateJson()
   let message = { fromUsername, toUsername, encrypted, clientTime, serverTime }
@@ -169,12 +169,15 @@ let server = createServer(async (req, res) => {
 })
 
 /**
+ * migrations
+ */
+let migrate = () => {
+  // ...
+}
+
+/**
  * server main
  */
-let initStorage = async () => {
-  let json = await readFile(File.storage, 'utf8')
-  Object.assign(storage, JSON.parse(json))
-}
 let handleError = err => {
   let status = err && err.status || 500
   let hideStack = /^4\d\d$/.test(status)
@@ -189,7 +192,7 @@ let main = async () => {
     // ...
   }, 1000 * 10)
   // storage init
-  let [err] = await to(initStorage())
+  let [err] = await to(init(File, storage, migrate))
   if (err) await to(mkdir(Dir.data)) // err ignored
   // server listen
   server.listen(port, () => {

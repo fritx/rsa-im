@@ -4,15 +4,14 @@ import axios from 'axios'
 import createHttpError from 'http-errors'
 import moment from 'moment'
 import { generateKeyPairSync } from 'node:crypto'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
-import { stdin, stdout } from 'node:process'
 import { createInterface } from 'node:readline/promises'
 import { Writer } from 'steno'
-import { Header, Url, dateJson, decrypt } from './common.js'
+import { Header, Url, commonHeaders, dateJson, decrypt, init } from './common.js'
 
-let rl = createInterface({ input: stdin, output: stdout })
+let rl = createInterface({ input: process.stdin, output: process.stdout })
 
 let storage = {
   username: '',
@@ -27,10 +26,7 @@ let storage = {
 /**
  * config
  */
-let commonHeaders = {
-  'content-type': 'application/json',
-}
-let officialUrl = 'http://fritx.me:3008'
+let officialUrl = 'https://fritx.me/im/'
 let serverUrl = process.env.SERVER_URL || officialUrl
 serverUrl = serverUrl.replace(/\/+$/, '')
 let Dir = {
@@ -141,6 +137,13 @@ let send = async (toUsername, text) => {
 }
 
 /**
+ * migrations
+ */
+let migrate = () => {
+  // ...
+}
+
+/**
  * CLI main
  */
 let log = (...args) => {
@@ -168,10 +171,6 @@ let handleError = async err => {
 }
 process.on('uncaughtException', handleError)
 process.on('unhandledRejection', handleError)
-let initStorage = async () => {
-  let json = await readFile(File.storage, 'utf8')
-  Object.assign(storage, JSON.parse(json))
-}
 let formatMessage = message => {
   return `${moment(message.serverTime).format('MM/DD HH:mm')} ${message.fromUsername} -> ${message.toUsername}: ${message.text}`
 }
@@ -223,12 +222,13 @@ let polling = async throws => {
 }
 let main = async () => {
   // storage init
-  let [err] = await to(initStorage())
+  let [err] = await to(init(File, storage, migrate))
   if (err) await to(mkdir(Dir.data)) // err ignored
   // list messages
   listMessages(storage.messageList)
   // async polling
-  await polling(true)
+  // await polling(true)
+  await polling()
   setInterval(polling, 1000 * 10)
   // interaction loop
   while (true) {
