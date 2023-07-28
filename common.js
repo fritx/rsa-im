@@ -1,4 +1,4 @@
-import { constants, privateDecrypt, publicEncrypt } from 'node:crypto'
+import { constants, privateDecrypt, publicEncrypt, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
 export let Method = {
@@ -18,14 +18,24 @@ export let commonHeaders = {
   'content-type': 'application/json',
 }
 
+export let formatError = err => {
+  let status = err && err.status || 500
+  let hideStack = /^4\d\d$/.test(status)
+  return hideStack ? String(err) : err
+}
+
 export let init = async (File, storage, migrate) => {
   let json = await readFile(File.storage, 'utf8')
   let data = JSON.parse(json)
   migrate(data)
   Object.assign(storage, data)
 }
+export let getMessageId = ({ fromUsername, toUsername, serverTime }) => {
+  return [fromUsername, toUsername, serverTime].join('--')
+}
 
 export let dateJson = () => new Date().toJSON()
+export let uuid = () => randomUUID()
 
 let rsaOptions = {
   padding: constants.RSA_PKCS1_OAEP_PADDING,

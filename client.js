@@ -2,6 +2,7 @@
 import { to } from 'await-to-js'
 import axios from 'axios'
 import createHttpError from 'http-errors'
+import { uniqBy } from 'lodash-es'
 import moment from 'moment'
 import { generateKeyPairSync } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
@@ -9,7 +10,7 @@ import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { Writer } from 'steno'
-import { Header, Url, commonHeaders, dateJson, decrypt, init } from './common.js'
+import { Header, Url, commonHeaders, dateJson, decrypt, formatError, getMessageId, init } from './common.js'
 
 let rl = createInterface({ input: process.stdin, output: process.stdout })
 
@@ -21,6 +22,9 @@ let storage = {
   messageList: [
     /* { fromUsername, toUsername, text, clientTime, serverTime }, */
   ],
+}
+let migrate = () => {
+  // ...
 }
 
 /**
@@ -121,26 +125,20 @@ let login = async () => {
 }
 let pull = async () => {
   let { pending } = await post(Url.pull)
-  let { privateKey } = storage
+  let { privateKey, messageList } = storage
   pending.forEach(message => {
     let [, text] = decrypt(privateKey, message.encrypted)
     Object.assign(message, { text })
     delete message.encrypted
   })
-  storage.messageList.push(...pending)
+  messageList.push(...pending)
+  storage.messageList = uniqBy(messageList, getMessageId)
   await save()
   return pending
 }
 let send = async (toUsername, text) => {
   let clientTime = dateJson()
   await post(Url.send, { toUsername, text, clientTime })
-}
-
-/**
- * migrations
- */
-let migrate = () => {
-  // ...
 }
 
 /**
@@ -157,11 +155,10 @@ let logError = (...args) => {
   if (currentPrompt) process.stdout.write(currentPrompt)
 }
 let handleError = async err => {
-  let status = err && err.status || 500
-  let hideStack = /^4\d\d$/.test(status)
   let tmp = excludingErrorProps.map(k => err && err[k])
   if (tmp[0]) excludingErrorProps.forEach(k => delete err[k])
-  logError('\n' + hideStack ? String(err) : err + '\n')
+  // logError('\n' + formatError(err) + '\n')
+  logError(formatError(err))
   if (tmp[0]) excludingErrorProps.forEach((k, i) => err[k] = tmp[i])
 
   if (err.status === 401) { // need to log in
@@ -178,6 +175,17 @@ let listMessages = list => {
   if (!list.length) return
   log('\n' + list.map(formatMessage).join('\n') + '\n')
 }
+let chat = async (username, toUsername) => {
+  let input = await question(`${username} -> ${toUsername}:`)
+  let isQuit = ['/q', '/quit', '/exit'].includes(input)
+  if (isQuit) return true
+  let isList = ['/ls', '/list'].includes(input)
+  if (isList) {
+    log('WIP...')
+    return
+  }
+  await send(toUsername, input)
+}
 let interaction = async () => {
   let { username, sessionSecret } = storage
   if (username) {
@@ -188,15 +196,9 @@ let interaction = async () => {
       if (!toUsername) return
       log('Type anything to send... (/q to quit, /ls to list all users)')
       while (true) { // loop
-        let input = await question(`${username} -> ${toUsername}:`)
-        let isQuit = ['/q', '/quit', '/exit'].includes(input)
-        if (isQuit) return
-        let isList = ['/ls', '/list'].includes(input)
-        if (isList) {
-          log('WIP...')
-          return
-        }
-        await send(toUsername, input)
+        let [err, isQuit] = await to(chat(username, toUsername))
+        if (err) await handleError(err)
+        if (isQuit || err && err.status === 404) break
       }
     } else {
       // need to log in

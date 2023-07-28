@@ -7,7 +7,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Writer } from 'steno'
 import streamToPromise from 'stream-to-promise'
-import { Header, Method, Url, commonHeaders, dateJson, encrypt, init } from './common.js'
+import { Header, Method, Url, commonHeaders, dateJson, encrypt, formatError, getMessageId, init, uuid } from './common.js'
 
 let storage = {
   userList: [
@@ -21,6 +21,9 @@ let memory = {
   sessionList: [
     /* { username, nonce, secret }, */
   ],
+}
+let migrate = () => {
+  // ...
 }
 
 /**
@@ -43,6 +46,9 @@ let textLimit = 200
 /**
  * helpers
  */
+let validateDateJson = json => {
+  return new Date(json).toJSON() === json
+}
 let validateUsername = username => {
   let user = storage.userList.find(user => user.username === username)
   if (user) throw createHttpError(403, `User already taken: ${username}`)
@@ -53,12 +59,46 @@ let validateUsername = username => {
     throw createHttpError(400, 'Each character should be a-z, A-Z or 0-9')
   }
 }
+let matchClientMessageDuplicate = props => record => {
+  return getMessageId(record) === getMessageId(props)
+}
+let validateClientMessage = (fromUsername, toUsername, text, clientTime, serverTime) => {
+  // validating message.text
+  if (text.length <= 0) throw createHttpError(400, 'message.text is required')
+  if (text.length > textLimit) {
+    throw createHttpError(400, `message.text.length should be less than ${textLimit}`)
+  }
+  // validating message.clientTime
+  if (!validateDateJson(clientTime)) throw createHttpError(403, 'message.clientTime invalid')
+  let { pendingMessageList } = storage
+  let matcher = matchClientMessageDuplicate({ fromUsername, toUsername, serverTime })
+  let duplicate = pendingMessageList.find(matcher)
+  if (duplicate) throw createHttpError(403, 'messageId duplicated')
+  // validating message.toUsername
+  let target = storage.userList.find(item => item.username === toUsername)
+  if (!target) throw createHttpError(404, `User not found: ${toUsername}`)
+  return target.publicKey
+}
 let generateSecret = () => {
   return generate({ length: 64, numbers: true, symbols: true })
 }
 let save = async patch => {
   if (patch) Object.assign(storage, patch)
   await FileWriter.storage.write(JSON.stringify(storage, null, 2))
+}
+let hidden = '******'
+let hideSecrets = result => {
+  if (!result) return
+  ;['secret', 'encrypted'].forEach(key => {
+    if (key in result) result[key] = hidden
+    Object.keys(result).forEach(k => {
+      if (Array.isArray(result[k])) {
+        result[k].forEach(item => {
+          if (item && key in item) item[key] = hidden
+        })
+      }
+    })
+  })
 }
 
 /**
@@ -74,7 +114,7 @@ let signup = async (username, publicKey) => {
 let prelogin = username => {
   let target = storage.userList.find(user => user.username === username)
   if (!target) throw createHttpError(404, `User not found: ${username}`)
-  let nonce = String(Math.random())
+  let nonce = uuid()
   let [, encrypted] = encrypt(target.publicKey, nonce)
   let session = { username, nonce, secret: '' }
   memory.sessionList.push(session)
@@ -99,20 +139,17 @@ let pull = async username => {
     return true
   })
   await save({ pendingMessageList })
-  pending.sort((a, b) => {
-    return a.clientTime < b.clientTime
-  })
+  pending.sort((a, b) => a.clientTime < b.clientTime)
   return pending
 }
-let send = (fromUsername, toUsername, text, clientTime) => {
-  if (text.length <= 0) throw createHttpError(400, 'message.text is required')
-  if (text.length > textLimit) throw createHttpError(400, `message.text.length should be less than ${textLimit}`)
-  let target = storage.userList.find(item => item.username === toUsername)
-  if (!target) throw createHttpError(404, `User not found: ${toUsername}`)
-  let [, encrypted] = encrypt(target.publicKey, text)
+let send = async (fromUsername, toUsername, text, clientTime) => {
   let serverTime = dateJson()
+  let publicKey = validateClientMessage(fromUsername, toUsername, text, clientTime, serverTime)
+  let [, encrypted] = encrypt(publicKey, text)
+  let { pendingMessageList } = storage
   let message = { fromUsername, toUsername, encrypted, clientTime, serverTime }
-  storage.pendingMessageList.push(message)
+  pendingMessageList.push(message)
+  await save()
 }
 
 /**
@@ -143,7 +180,7 @@ let handler = async req => {
   } else if (req.method === Method.POST && req.url === Url.send) {
     let username = validateLogin(req)
     let { toUsername, text, clientTime } = await getPayload(req)
-    send(username, toUsername, text, clientTime)
+    await send(username, toUsername, text, clientTime)
   } else if (req.method === Method.POST && req.url === Url.pull) {
     let username = validateLogin(req)
     let pending = await pull(username)
@@ -157,40 +194,33 @@ let server = createServer(async (req, res) => {
   let status = 200
   if (err) {
     status = err && err.status || 500
-    console.error('res', req.method, req.url, status, err)
     res.writeHead(200, commonHeaders) // fixed status 200
     res.end(JSON.stringify({ status, message: err.message || String(err) }))
+    console.error('res', req.method, req.url, status, formatError(err))
     return
   }
-  console.log('res', req.method, req.url, status, result)
   if (Array.isArray(result)) result = { result } // just in case
   res.writeHead(200, commonHeaders)
   res.end(JSON.stringify({ status, ...result }))
+  hideSecrets(result)
+  console.log('res', req.method, req.url, status, result)
 })
-
-/**
- * migrations
- */
-let migrate = () => {
-  // ...
-}
 
 /**
  * server main
  */
 let handleError = err => {
-  let status = err && err.status || 500
-  let hideStack = /^4\d\d$/.test(status)
   console.log()
-  console.error(hideStack ? String(err) : err)
+  console.error(formatError(err))
   console.log()
 }
 process.on('uncaughtException', handleError)
 process.on('unhandledRejection', handleError)
+let schedule = () => {
+  // ...
+}
 let main = async () => {
-  setInterval(async () => {
-    // ...
-  }, 1000 * 10)
+  setInterval(schedule, 1000 * 10)
   // storage init
   let [err] = await to(init(File, storage, migrate))
   if (err) await to(mkdir(Dir.data)) // err ignored
