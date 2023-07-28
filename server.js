@@ -7,6 +7,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Writer } from 'steno'
 import streamToPromise from 'stream-to-promise'
+import * as uuid from 'uuid'
 import { Header, Method, Url, commonHeaders, dateJson, encrypt, init } from './common.js'
 
 let storage = {
@@ -14,7 +15,7 @@ let storage = {
     /* { username, publicKey, createdAt }, */
   ],
   pendingMessageList: [
-    /* { fromUsername, toUsername, encrypted, clientTime, serverTime }, */
+    /* { id, cid, fromUsername, toUsername, encrypted, clientTime, serverTime }, */
   ],
 }
 let memory = {
@@ -74,7 +75,7 @@ let signup = async (username, publicKey) => {
 let prelogin = username => {
   let target = storage.userList.find(user => user.username === username)
   if (!target) throw createHttpError(404, `User not found: ${username}`)
-  let nonce = String(Math.random())
+  let nonce = uuid.v4()
   let [, encrypted] = encrypt(target.publicKey, nonce)
   let session = { username, nonce, secret: '' }
   memory.sessionList.push(session)
@@ -99,20 +100,27 @@ let pull = async username => {
     return true
   })
   await save({ pendingMessageList })
-  pending.sort((a, b) => {
-    return a.clientTime < b.clientTime
-  })
+  pending.sort((a, b) => a.clientTime < b.clientTime)
   return pending
 }
-let send = (fromUsername, toUsername, text, clientTime) => {
+let send = (cid, fromUsername, toUsername, text, clientTime) => {
+  if (!uuid.validate(cid)) throw createHttpError(400, 'message.cid invalid')
+  let { pendingMessageList } = storage
+  if (pendingMessageList.find(message => message.cid === cid)) {
+    throw createHttpError(403, 'message.cid duplicated')
+  }
   if (text.length <= 0) throw createHttpError(400, 'message.text is required')
   if (text.length > textLimit) throw createHttpError(400, `message.text.length should be less than ${textLimit}`)
   let target = storage.userList.find(item => item.username === toUsername)
   if (!target) throw createHttpError(404, `User not found: ${toUsername}`)
   let [, encrypted] = encrypt(target.publicKey, text)
   let serverTime = dateJson()
-  let message = { fromUsername, toUsername, encrypted, clientTime, serverTime }
-  storage.pendingMessageList.push(message)
+  let id
+  while (!id || pendingMessageList.find(message => message.id === id)) {
+    id = uuid.v4()
+  }
+  let message = { id, cid, fromUsername, toUsername, encrypted, clientTime, serverTime }
+  pendingMessageList.push(message)
 }
 
 /**
@@ -142,8 +150,8 @@ let handler = async req => {
     return { secret }
   } else if (req.method === Method.POST && req.url === Url.send) {
     let username = validateLogin(req)
-    let { toUsername, text, clientTime } = await getPayload(req)
-    send(username, toUsername, text, clientTime)
+    let { cid, toUsername, text, clientTime } = await getPayload(req)
+    send(cid, username, toUsername, text, clientTime)
   } else if (req.method === Method.POST && req.url === Url.pull) {
     let username = validateLogin(req)
     let pending = await pull(username)
@@ -187,10 +195,11 @@ let handleError = err => {
 }
 process.on('uncaughtException', handleError)
 process.on('unhandledRejection', handleError)
+let schedule = () => {
+  // ...
+}
 let main = async () => {
-  setInterval(async () => {
-    // ...
-  }, 1000 * 10)
+  setInterval(schedule, 1000 * 10)
   // storage init
   let [err] = await to(init(File, storage, migrate))
   if (err) await to(mkdir(Dir.data)) // err ignored

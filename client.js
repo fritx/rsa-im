@@ -2,6 +2,7 @@
 import { to } from 'await-to-js'
 import axios from 'axios'
 import createHttpError from 'http-errors'
+import { uniqBy } from 'lodash-es'
 import moment from 'moment'
 import { generateKeyPairSync } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
@@ -9,6 +10,7 @@ import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { Writer } from 'steno'
+import * as uuid from 'uuid'
 import { Header, Url, commonHeaders, dateJson, decrypt, init } from './common.js'
 
 let rl = createInterface({ input: process.stdin, output: process.stdout })
@@ -121,19 +123,21 @@ let login = async () => {
 }
 let pull = async () => {
   let { pending } = await post(Url.pull)
-  let { privateKey } = storage
+  let { privateKey, messageList } = storage
   pending.forEach(message => {
     let [, text] = decrypt(privateKey, message.encrypted)
     Object.assign(message, { text })
     delete message.encrypted
   })
-  storage.messageList.push(...pending)
+  messageList.push(...pending)
+  storage.messageList = uniqBy(messageList, 'id')
   await save()
   return pending
 }
 let send = async (toUsername, text) => {
+  let cid = uuid.v4()
   let clientTime = dateJson()
-  await post(Url.send, { toUsername, text, clientTime })
+  await post(Url.send, { cid, toUsername, text, clientTime })
 }
 
 /**
