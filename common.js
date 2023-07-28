@@ -18,6 +18,12 @@ export let commonHeaders = {
   'content-type': 'application/json',
 }
 
+export let formatError = err => {
+  let status = err && err.status || 500
+  let hideStack = /^4\d\d$/.test(status)
+  return hideStack ? String(err) : err
+}
+
 export let init = async (File, storage, migrate) => {
   let json = await readFile(File.storage, 'utf8')
   let data = JSON.parse(json)

@@ -8,20 +8,23 @@ import { fileURLToPath } from 'node:url'
 import { Writer } from 'steno'
 import streamToPromise from 'stream-to-promise'
 import * as uuid from 'uuid'
-import { Header, Method, Url, commonHeaders, dateJson, encrypt, init } from './common.js'
+import { Header, Method, Url, commonHeaders, dateJson, encrypt, formatError, init } from './common.js'
 
 let storage = {
   userList: [
     /* { username, publicKey, createdAt }, */
   ],
   pendingMessageList: [
-    /* { id, cid, fromUsername, toUsername, encrypted, clientTime, serverTime }, */
+    /* { id, fromUsername, toUsername, encrypted, clientTime, serverTime }, */
   ],
 }
 let memory = {
   sessionList: [
     /* { username, nonce, secret }, */
   ],
+}
+let migrate = () => {
+  // ...
 }
 
 /**
@@ -44,6 +47,9 @@ let textLimit = 200
 /**
  * helpers
  */
+let validateDateJson = json => {
+  return new Date(json).toJSON() === json
+}
 let validateUsername = username => {
   let user = storage.userList.find(user => user.username === username)
   if (user) throw createHttpError(403, `User already taken: ${username}`)
@@ -54,12 +60,48 @@ let validateUsername = username => {
     throw createHttpError(400, 'Each character should be a-z, A-Z or 0-9')
   }
 }
+let matchClientMessageDuplicate = props => record => {
+  return record.fromUsername === props.fromUsername &&
+    record.toUsername === props.toUsername &&
+    record.clientTime === props.clientTime
+}
+let validateClientMessage = (fromUsername, toUsername, text, clientTime) => {
+  // validating message.text
+  if (text.length <= 0) throw createHttpError(400, 'message.text is required')
+  if (text.length > textLimit) {
+    throw createHttpError(400, `message.text.length should be less than ${textLimit}`)
+  }
+  // validating message.clientTime
+  if (!validateDateJson(clientTime)) throw createHttpError(403, 'message.clientTime invalid')
+  let { pendingMessageList } = storage
+  let matcher = matchClientMessageDuplicate({ fromUsername, toUsername, clientTime })
+  let duplicate = pendingMessageList.find(matcher)
+  if (duplicate) throw createHttpError(403, 'message.clientTime duplicated')
+  // validating message.toUsername
+  let target = storage.userList.find(item => item.username === toUsername)
+  if (!target) throw createHttpError(404, `User not found: ${toUsername}`)
+  return target.publicKey
+}
 let generateSecret = () => {
   return generate({ length: 64, numbers: true, symbols: true })
 }
 let save = async patch => {
   if (patch) Object.assign(storage, patch)
   await FileWriter.storage.write(JSON.stringify(storage, null, 2))
+}
+let hidden = '******'
+let hideSecrets = result => {
+  if (!result) return
+  ;['secret', 'encrypted'].forEach(key => {
+    if (key in result) result[key] = hidden
+    Object.keys(result).forEach(k => {
+      if (Array.isArray(result[k])) {
+        result[k].forEach(item => {
+          if (item && key in item) item[key] = hidden
+        })
+      }
+    })
+  })
 }
 
 /**
@@ -103,24 +145,18 @@ let pull = async username => {
   pending.sort((a, b) => a.clientTime < b.clientTime)
   return pending
 }
-let send = (cid, fromUsername, toUsername, text, clientTime) => {
-  if (!uuid.validate(cid)) throw createHttpError(400, 'message.cid invalid')
+let send = async (fromUsername, toUsername, text, clientTime) => {
+  let publicKey = validateClientMessage(fromUsername, toUsername, text, clientTime)
+  let [, encrypted] = encrypt(publicKey, text)
   let { pendingMessageList } = storage
-  if (pendingMessageList.find(message => message.cid === cid)) {
-    throw createHttpError(403, 'message.cid duplicated')
-  }
-  if (text.length <= 0) throw createHttpError(400, 'message.text is required')
-  if (text.length > textLimit) throw createHttpError(400, `message.text.length should be less than ${textLimit}`)
-  let target = storage.userList.find(item => item.username === toUsername)
-  if (!target) throw createHttpError(404, `User not found: ${toUsername}`)
-  let [, encrypted] = encrypt(target.publicKey, text)
-  let serverTime = dateJson()
   let id
   while (!id || pendingMessageList.find(message => message.id === id)) {
     id = uuid.v4()
   }
-  let message = { id, cid, fromUsername, toUsername, encrypted, clientTime, serverTime }
+  let serverTime = dateJson()
+  let message = { id, fromUsername, toUsername, encrypted, clientTime, serverTime }
   pendingMessageList.push(message)
+  await save()
 }
 
 /**
@@ -150,8 +186,8 @@ let handler = async req => {
     return { secret }
   } else if (req.method === Method.POST && req.url === Url.send) {
     let username = validateLogin(req)
-    let { cid, toUsername, text, clientTime } = await getPayload(req)
-    send(cid, username, toUsername, text, clientTime)
+    let { toUsername, text, clientTime } = await getPayload(req)
+    await send(username, toUsername, text, clientTime)
   } else if (req.method === Method.POST && req.url === Url.pull) {
     let username = validateLogin(req)
     let pending = await pull(username)
@@ -165,32 +201,24 @@ let server = createServer(async (req, res) => {
   let status = 200
   if (err) {
     status = err && err.status || 500
-    console.error('res', req.method, req.url, status, err)
     res.writeHead(200, commonHeaders) // fixed status 200
     res.end(JSON.stringify({ status, message: err.message || String(err) }))
+    console.error('res', req.method, req.url, status, formatError(err))
     return
   }
-  console.log('res', req.method, req.url, status, result)
   if (Array.isArray(result)) result = { result } // just in case
   res.writeHead(200, commonHeaders)
   res.end(JSON.stringify({ status, ...result }))
+  hideSecrets(result)
+  console.log('res', req.method, req.url, status, result)
 })
-
-/**
- * migrations
- */
-let migrate = () => {
-  // ...
-}
 
 /**
  * server main
  */
 let handleError = err => {
-  let status = err && err.status || 500
-  let hideStack = /^4\d\d$/.test(status)
   console.log()
-  console.error(hideStack ? String(err) : err)
+  console.error(formatError(err))
   console.log()
 }
 process.on('uncaughtException', handleError)

@@ -11,7 +11,7 @@ import { resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { Writer } from 'steno'
 import * as uuid from 'uuid'
-import { Header, Url, commonHeaders, dateJson, decrypt, init } from './common.js'
+import { Header, Url, commonHeaders, dateJson, decrypt, formatError, init } from './common.js'
 
 let rl = createInterface({ input: process.stdin, output: process.stdout })
 
@@ -23,6 +23,12 @@ let storage = {
   messageList: [
     /* { fromUsername, toUsername, text, clientTime, serverTime }, */
   ],
+}
+let migrateMessage = message => {
+  if (!message.id) message.id = uuid.v4()
+}
+let migrate = data => {
+  data.messageList.forEach(migrateMessage)
 }
 
 /**
@@ -135,16 +141,8 @@ let pull = async () => {
   return pending
 }
 let send = async (toUsername, text) => {
-  let cid = uuid.v4()
   let clientTime = dateJson()
-  await post(Url.send, { cid, toUsername, text, clientTime })
-}
-
-/**
- * migrations
- */
-let migrate = () => {
-  // ...
+  await post(Url.send, { toUsername, text, clientTime })
 }
 
 /**
@@ -161,11 +159,10 @@ let logError = (...args) => {
   if (currentPrompt) process.stdout.write(currentPrompt)
 }
 let handleError = async err => {
-  let status = err && err.status || 500
-  let hideStack = /^4\d\d$/.test(status)
   let tmp = excludingErrorProps.map(k => err && err[k])
   if (tmp[0]) excludingErrorProps.forEach(k => delete err[k])
-  logError('\n' + hideStack ? String(err) : err + '\n')
+  // logError('\n' + formatError(err) + '\n')
+  logError(formatError(err))
   if (tmp[0]) excludingErrorProps.forEach((k, i) => err[k] = tmp[i])
 
   if (err.status === 401) { // need to log in
@@ -182,6 +179,17 @@ let listMessages = list => {
   if (!list.length) return
   log('\n' + list.map(formatMessage).join('\n') + '\n')
 }
+let chat = async (username, toUsername) => {
+  let input = await question(`${username} -> ${toUsername}:`)
+  let isQuit = ['/q', '/quit', '/exit'].includes(input)
+  if (isQuit) return true
+  let isList = ['/ls', '/list'].includes(input)
+  if (isList) {
+    log('WIP...')
+    return
+  }
+  await send(toUsername, input)
+}
 let interaction = async () => {
   let { username, sessionSecret } = storage
   if (username) {
@@ -192,15 +200,9 @@ let interaction = async () => {
       if (!toUsername) return
       log('Type anything to send... (/q to quit, /ls to list all users)')
       while (true) { // loop
-        let input = await question(`${username} -> ${toUsername}:`)
-        let isQuit = ['/q', '/quit', '/exit'].includes(input)
-        if (isQuit) return
-        let isList = ['/ls', '/list'].includes(input)
-        if (isList) {
-          log('WIP...')
-          return
-        }
-        await send(toUsername, input)
+        let [err, isQuit] = await to(chat(username, toUsername))
+        if (err) await handleError(err)
+        if (isQuit || err && err.status === 404) break
       }
     } else {
       // need to log in
